@@ -4,6 +4,8 @@ use std::io::Write;
 use std::os::unix::io::AsRawFd;
 use termios::*;
 
+static EDITEUREN_VERSION: &str = "11";
+
 struct Keyboard {
   stdin: io::Stdin
 }
@@ -68,8 +70,20 @@ impl AnsiBuffer {
     self.buffer.push_str("\x1b[2J")
   }
 
+  fn erase_to_end_of_line(&mut self) {
+    self.buffer.push_str("\x1b[K")
+  }
+
   fn move_top_left(&mut self) {
     self.buffer.push_str("\x1b[H")
+  }
+
+  fn show_cursor(&mut self) {
+    self.buffer.push_str("\x1b[?25h")
+  }
+
+  fn hide_cursor(&mut self) {
+    self.buffer.push_str("\x1b[?25l")
   }
 
   fn emit_and_flush(&self, out: &mut io::Stdout) -> io::Result<()> {
@@ -98,17 +112,35 @@ impl Screen {
 
   fn refresh(&mut self) -> io::Result<()> {
     let mut buffer = AnsiBuffer::new();
-    buffer.clear_screen();
+    buffer.hide_cursor();
     buffer.move_top_left();
     self.draw_rows(&mut buffer);
     buffer.move_top_left();
+    buffer.show_cursor();
     buffer.emit_and_flush(&mut self.stdout)
   }
 
   fn draw_rows(&mut self, buffer: &mut AnsiBuffer) {
-    for _ in 1..self.height {
-      buffer.append("~\r\n");
+    for i in 1..self.height {
+      if i == self.height / 3 {
+        let mut blurb = format!("Editeuren editor -- version {}", EDITEUREN_VERSION);
+        blurb.truncate(self.width as usize);
+
+        let len = blurb.chars().count() as u32;
+        let pad_width = (self.width - len) / 2;
+        let padding = String::from_utf8(vec![b' '; pad_width as usize]).unwrap();
+
+        buffer.append(&padding);
+        buffer.append(&blurb);
+        buffer.erase_to_end_of_line();
+        buffer.append("\r\n")
+      } else {
+        buffer.append("~");
+        buffer.erase_to_end_of_line();
+        buffer.append("\r\n")
+      }
     }
+    buffer.erase_to_end_of_line();
     buffer.append("~")
   }
 }
@@ -171,7 +203,7 @@ impl Editor {
       if self.process_key() {
         break Ok(())
       }
-    }  
+    }
   }
 }
 
