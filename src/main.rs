@@ -15,6 +15,10 @@ impl Keyboard {
     Keyboard { stdin: io::stdin() }
   }
 
+  fn ctrl_key(c: char) -> char {
+    (c as u8 & 0x1fu8) as char
+  }
+
   fn read_key(&mut self) -> char {
     let mut buf: [u8; 1] = [0];
   
@@ -45,7 +49,7 @@ impl Winsize {
     let r = unsafe {
       libc::ioctl(libc::STDOUT_FILENO, Self::TIOCGWINSZ, &wz)
     };
-
+ 
     match r {
       0 => Ok((wz.ws_col, wz.ws_row)),
       x => Err(io::Error::new(io::ErrorKind::Other, x.to_string()))
@@ -86,6 +90,11 @@ impl AnsiBuffer {
     self.buffer.push_str("\x1b[?25l")
   }
 
+  fn move_cursor_to(&mut self, row: i32, col: i32) {
+    let s = format!("\x1b[{};{}H", row + 1, col + 1);
+    self.buffer.push_str(&s)
+  }
+
   fn emit_and_flush(&self, out: &mut io::Stdout) -> io::Result<()> {
     out.write_all(self.buffer.as_bytes())?;
     out.flush()
@@ -95,7 +104,8 @@ impl AnsiBuffer {
 struct Screen {
   stdout: io::Stdout,
   width: u32,
-  height: u32
+  height: u32,
+  cursor: (i32, i32)
 }
 
 impl Screen {
@@ -103,9 +113,10 @@ impl Screen {
     let (width, height) = Winsize::get()?;
     let screen = 
       Screen {
-          stdout: io::stdout(), 
-          width: width as u32,
-          height: height as u32
+        stdout: io::stdout(), 
+        width: width as u32,
+        height: height as u32,
+        cursor: (0, 0)
       };
     Ok(screen)
   }
@@ -116,8 +127,14 @@ impl Screen {
     buffer.move_top_left();
     self.draw_rows(&mut buffer);
     buffer.move_top_left();
+    buffer.move_cursor_to(self.cursor.0, self.cursor.1);
     buffer.show_cursor();
     buffer.emit_and_flush(&mut self.stdout)
+  }
+
+  fn update_cursor_location(&mut self, row_delta: i32, col_delta: i32) {
+    self.cursor.0 += row_delta;
+    self.cursor.1 += col_delta;
   }
 
   fn draw_rows(&mut self, buffer: &mut AnsiBuffer) {
@@ -148,7 +165,7 @@ impl Screen {
 struct Editor {
   restore_termios: Termios,
   keyboard: Keyboard,
-  screen: Screen
+  screen: Screen,
 }
 
 impl Editor {
@@ -159,7 +176,7 @@ impl Editor {
       Editor {
         restore_termios: original_termios,
         keyboard: Keyboard::new(),
-        screen: screen
+        screen: screen,
       };
     Ok(editor)
   }
@@ -190,9 +207,22 @@ impl Editor {
     Ok(original_termios)
   }
 
+  fn handle_navigation(&mut self, key: char) {
+    match key {
+      'w' => self.screen.update_cursor_location(-1,  0),
+      's' => self.screen.update_cursor_location( 1,  0),
+      'a' => self.screen.update_cursor_location( 0, -1),
+      'd' => self.screen.update_cursor_location( 0,  1),
+      _ => ()
+    }
+  }
+
   fn process_key(&mut self) -> bool {
-    match self.keyboard.read_key() {
-      c if c == ctrl_key('q') => true,
+    let key = self.keyboard.read_key();
+    self.handle_navigation(key);
+
+    match key {
+      c if c == Keyboard::ctrl_key('q') => true,
       c => { print!("{}", c); false }
     }
   }
@@ -205,10 +235,6 @@ impl Editor {
       }
     }
   }
-}
-
-fn ctrl_key(c: char) -> char {
-  (c as u8 & 0x1fu8) as char
 }
 
 fn main() -> io::Result<()> {
